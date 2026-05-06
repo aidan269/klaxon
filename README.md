@@ -7,7 +7,10 @@ automated remediation.
 > The Python package is named `socmon` (the CLI is `socmon` too). The repo name
 > is `klaxon` — short, on-brand for an alerting tool.
 
-> **Status:** scaffold + interfaces. Implementations land after structure review.
+> **Status:** impersonation detector + mention/keyword spike detectors running
+> end-to-end. Reddit + RSS collectors and Slack alerter wired. 86 tests passing.
+> Roadmap: `fake_job` detector, PagerDuty/email/webhook alerters, continuous
+> scheduler (`socmon run`).
 
 ## What it does
 
@@ -40,16 +43,57 @@ Three rules:
 Detectors are stateless where possible; rolling baselines and seen-account hashes
 live in the DB so `socmon backtest` can rerun the same logic over history.
 
-## Quick start (after impl lands)
+## Claude Code Quick Start
+
+Paste this prompt into Claude Code from any directory and it'll walk you through
+setup interactively. Bring your brand name, legit handles, exec list, and (if
+you want Slack alerts) a webhook URL.
+
+```
+You are setting up klaxon (https://github.com/aidan269/klaxon) — a self-hosted
+social monitoring + brand protection tool. Drive the setup end-to-end:
+
+1. If you're not already in a klaxon checkout, clone it into the current
+   directory and cd in.
+2. Verify Python 3.11+ is on PATH; if not, install it (brew install python@3.11
+   on macOS, system package manager elsewhere) and use that interpreter.
+3. Create .venv and `pip install -e .[dev,slack]`. Run `pytest -q` and
+   confirm all tests pass before continuing.
+4. Run `socmon init` to write a starter socmon.yaml.
+5. Walk me through filling out the YAML, ONE QUESTION AT A TIME. Apply each
+   answer to the file. Ask me for:
+     - organization name
+     - brand name + aliases + corporate domains
+     - legitimate brand handles per platform (reddit / twitter / bluesky / ...)
+     - executives to monitor (name, title, their legit handles)
+     - keywords to track (and severity per keyword)
+     - any local logo image paths (used for avatar pHashing)
+   Skip optional sections I say I don't need.
+6. If I want Slack alerts: prompt me for the webhook URL, tell me to
+   `export SOCMON_SLACK_BRAND_WEBHOOK=...` in this shell, then run
+   `socmon alerts test --channel slack-brand` to verify.
+7. Run `socmon scan --window-hours 168` once. Summarize the result: counts of
+   accounts collected, posts collected, findings produced, anything that was
+   skipped because it's a stub (fake_job detector, PagerDuty / email / webhook
+   alerters).
+8. If any findings fired, walk me through the highest-severity one's metadata
+   (signals breakdown for impersonation, top_authors + z-score for spikes) so
+   I understand what triggered it.
+
+Be concise. Don't paste full file contents back at me. Stop and wait for my
+input when you need brand-specific values.
+```
+
+## Quick start (manual)
 
 ```bash
-pip install -e ".[dev,slack]"
-socmon init                         # writes a starter socmon.yaml
-$EDITOR socmon.yaml
+pip install -e ".[dev,slack]"       # Python 3.11+ required
+socmon init                          # writes a starter socmon.yaml
+$EDITOR socmon.yaml                  # fill in brand, execs, keywords, alerters
 export SOCMON_SLACK_BRAND_WEBHOOK=https://hooks.slack.com/services/...
-socmon alerts test                  # verify alerting wiring
-socmon scan                         # one-shot
-socmon run                          # continuous
+socmon alerts test --channel slack-brand   # verify alerting wiring
+socmon scan --window-hours 168       # one-shot collect + detect + alert
+# socmon run                         # continuous mode — on the roadmap
 ```
 
 ## Configuration
@@ -96,5 +140,7 @@ That's it — no other code changes.
 pytest
 ```
 
-Detector tests use fixture observations under `tests/fixtures/` so the spike math,
-impersonation scoring, and fake-job heuristics can be verified deterministically.
+Tests under `tests/` cover the spike math, the keyword DSL parser/evaluator,
+the impersonation scoring (incl. confusables, exclusions, severity bands), and
+end-to-end runs of both spike detectors over a real SQLite round-trip. 86 cases
+total; the suite finishes in a couple of seconds with no network calls.
