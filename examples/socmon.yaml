@@ -1,0 +1,116 @@
+# Example socmon configuration — referenced from `socmon init`.
+# Credentials are NEVER stored here directly; they are looked up by env-var name.
+
+organization: Acme Corp
+
+brand:
+  name: Acme
+  aliases: [Acme Corp, AcmeCo, "Acme, Inc."]
+  domains: [acme.com, acme.io]
+  legit_handles:
+    reddit: [u/acme_official]
+    twitter: [acmecorp]
+    bluesky: [acme.com]
+  logo_paths:
+    - ./assets/logo_primary.png
+    - ./assets/logo_dark.png
+
+executives:
+  - name: Jane Doe
+    title: CEO
+    high_value_target: true
+    legit_handles: { twitter: [janedoeacme], linkedin: [janedoe] }
+  - name: John Smith
+    title: CISO
+    legit_handles: { twitter: [jsmith_acme] }
+
+keywords:
+  # The DSL is strictly left-to-right (no parens, no precedence). If you need
+  # OR-of-ANDs, use multiple Keyword entries — one per AND-group.
+  - expr: '"acme" AND breach'
+    severity: high
+    label: acme-breach-chatter
+  - expr: '"acme" AND leak'
+    severity: high
+    label: acme-leak-chatter
+  - expr: '"acme" AND 0day'
+    severity: high
+  - expr: '"acme" NEAR/10 credentials'
+    severity: high
+  - expr: 'acmecorp'
+    severity: low
+
+legit_jobs:
+  kind: greenhouse
+  url: https://boards-api.greenhouse.io/v1/boards/acme/jobs
+
+baseline_window_days: 7
+spike_z_threshold: 3.0
+spike_min_volume: 5
+
+storage:
+  backend: sqlite
+  dsn: sqlite:///socmon.db
+
+collectors:
+  - name: reddit-main
+    type: reddit
+    poll_interval_seconds: 300
+    options:
+      subreddits: [all, cybersecurity, netsec]
+      user_agent: "socmon/0.1 (+contact: secops@acme.com)"
+  - name: news-rss
+    type: rss
+    poll_interval_seconds: 900
+    options:
+      feeds:
+        - https://www.bleepingcomputer.com/feed/
+        - https://krebsonsecurity.com/feed/
+        - https://news.google.com/rss/search?q=%22Acme+Corp%22
+  - name: twitter-stub
+    type: twitter
+    enabled: false
+  - name: bluesky-stub
+    type: bluesky
+    enabled: false
+
+detectors:
+  - { name: mentions, type: mention_spike, options: { z_threshold: 3.0, bucket: "1h" } }
+  - { name: keywords, type: keyword_spike, options: { z_threshold: 3.0 } }
+  - { name: imp,      type: impersonation }
+  - { name: jobs,     type: fake_job }
+
+alerters:
+  - name: slack-brand
+    type: slack
+    options:
+      webhook_url_env: SOCMON_SLACK_BRAND_WEBHOOK
+      channel: "#brand-monitoring"
+  - name: pd-execs
+    type: pagerduty
+    options:
+      routing_key_env: SOCMON_PD_ROUTING_KEY
+  - name: secops-email
+    type: email
+    options:
+      smtp_host: smtp.acme.com
+      smtp_port: 587
+      smtp_user_env: SOCMON_SMTP_USER
+      smtp_pass_env: SOCMON_SMTP_PASS
+      from_addr: socmon@acme.com
+      to_addrs: [secops@acme.com]
+
+routes:
+  # Critical exec impersonation pages secops.
+  - match_kind: impersonation
+    severity_min: high
+    channels: [pd-execs, slack-brand]
+  # Everything else with at least medium severity goes to Slack.
+  - match_kind: "*"
+    severity_min: medium
+    channels: [slack-brand]
+  # Low-severity findings get rolled into a daily email digest.
+  - match_kind: "*"
+    severity_min: low
+    channels: [secops-email]
+    digest: true
