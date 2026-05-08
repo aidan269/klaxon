@@ -68,12 +68,17 @@ def run(ctx: click.Context) -> None:
 @main.command()
 @click.option("--window-hours", default=24, show_default=True,
               help="Detection window size, in hours.")
+@click.option("--json", "as_json", is_flag=True,
+              help="Emit JSON instead of the human-readable summary.")
 @click.pass_context
-def scan(ctx: click.Context, window_hours: int) -> None:
+def scan(ctx: click.Context, window_hours: int, as_json: bool) -> None:
     """One-shot scan: collect, detect, alert."""
     cfg = load_config(ctx.obj["config_path"])
     summary = runner.scan(cfg, window_hours=window_hours)
-    click.echo(json.dumps(summary, indent=2))
+    if as_json:
+        click.echo(json.dumps(summary, indent=2))
+    else:
+        _render_scan_summary(summary)
 
 
 @main.command()
@@ -82,9 +87,10 @@ def scan(ctx: click.Context, window_hours: int) -> None:
 @click.option("--detector", "-d", multiple=True, help="Limit to these detector names.")
 @click.option("--dry-run/--no-dry-run", default=True,
               help="If True (default), do not insert findings or fire alerts.")
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 @click.pass_context
 def backtest(ctx: click.Context, start: str, end: str, detector: tuple[str, ...],
-             dry_run: bool) -> None:
+             dry_run: bool, as_json: bool) -> None:
     """Replay detectors over already-collected observations."""
     cfg = load_config(ctx.obj["config_path"])
     summary = runner.backtest(
@@ -94,7 +100,73 @@ def backtest(ctx: click.Context, start: str, end: str, detector: tuple[str, ...]
         detector_names=list(detector) or None,
         dry_run=dry_run,
     )
-    click.echo(json.dumps(summary, indent=2))
+    if as_json:
+        click.echo(json.dumps(summary, indent=2))
+    else:
+        _render_backtest_summary(summary)
+
+
+# ---------------------------------------------------------------------------
+# Render helpers
+# ---------------------------------------------------------------------------
+
+
+def _render_scan_summary(summary: dict) -> None:
+    """Compact text layout. URLs are emitted bare so terminals make them clickable."""
+    win = summary.get("window") or ["?", "?"]
+    click.echo("")
+    click.echo(f"Scan window: {win[0]} → {win[1]}")
+    click.echo("")
+
+    sections = [
+        ("Accounts", summary["new_accounts"], _format_account_line),
+        ("Posts", summary["new_posts"], _format_post_line),
+        ("Findings", summary["new_findings"], _format_finding_line),
+    ]
+    for label, section, fmt in sections:
+        count = section["count"]
+        click.echo(f"  {label}: {count} new")
+        for item in section["items"]:
+            click.echo(f"    └ {fmt(item)}")
+        if section["truncated"]:
+            shown = len(section["items"])
+            click.echo(f"    └ … ({count - shown} more not shown)")
+        click.echo("")
+
+
+def _render_backtest_summary(summary: dict) -> None:
+    win = summary.get("window") or ["?", "?"]
+    click.echo("")
+    click.echo(f"Backtest window: {win[0]} → {win[1]}  (dry_run={summary['dry_run']})")
+    click.echo("")
+    f = summary["new_findings"]
+    click.echo(f"  Findings: {f['count']} new")
+    for item in f["items"]:
+        click.echo(f"    └ {_format_finding_line(item)}")
+    if f["truncated"]:
+        click.echo(f"    └ … ({f['count'] - len(f['items'])} more not shown)")
+    click.echo("")
+
+
+def _format_account_line(item: dict) -> str:
+    handle = item.get("handle") or "?"
+    url = item.get("url") or ""
+    return f"{item['platform']}/{handle}" + (f"  {url}" if url else "")
+
+
+def _format_post_line(item: dict) -> str:
+    author = item.get("author") or "?"
+    title = item.get("title") or "(no text)"
+    url = item.get("url") or ""
+    return f"[{item['platform']}] {author}: {title}" + (f"  {url}" if url else "")
+
+
+def _format_finding_line(item: dict) -> str:
+    sev = (item.get("severity") or "").upper()
+    score = item.get("score")
+    score_str = f" (score {score:.1f})" if isinstance(score, (int, float)) else ""
+    url = item.get("url") or ""
+    return f"[{sev}] {item['title']}{score_str}" + (f"  {url}" if url else "")
 
 
 @main.group()

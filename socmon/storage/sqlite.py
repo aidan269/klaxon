@@ -135,15 +135,15 @@ class SqliteStorage(Storage):
 
     # ----- Observations -----
 
-    def upsert_observations(self, items: Iterable[Observation]) -> int:
-        """Returns the count of NEW (not previously seen) observations."""
-        new_count = 0
+    def upsert_observations(self, items: Iterable[Observation]) -> list[Observation]:
+        """Returns the NEW (not previously seen) observations."""
+        new_items: list[Observation] = []
         with Session(self.engine) as s:
             for obs in items:
                 existing = s.get(_ObservationRow, obs.id)
                 if existing is None:
                     s.add(_observation_to_row(obs))
-                    new_count += 1
+                    new_items.append(obs)
                 else:
                     # Update payload + collected_at; leave created_at alone (immutable on-platform).
                     fresh = _observation_to_row(obs)
@@ -154,7 +154,7 @@ class SqliteStorage(Storage):
                     existing.collected_at = fresh.collected_at
                     existing.payload = fresh.payload
             s.commit()
-        return new_count
+        return new_items
 
     def query_observations(
         self,

@@ -72,13 +72,22 @@ social monitoring + brand protection tool. Drive the setup end-to-end:
 6. If I want Slack alerts: prompt me for the webhook URL, tell me to
    `export SOCMON_SLACK_BRAND_WEBHOOK=...` in this shell, then run
    `socmon alerts test --channel slack-brand` to verify.
-7. Run `socmon scan --window-hours 168` once. Summarize the result: counts of
-   accounts collected, posts collected, findings produced, anything that was
-   skipped because it's a stub (fake_job detector, PagerDuty / email / webhook
-   alerters).
+7. Run `socmon scan --window-hours 168` once. Read me the human summary: for
+   each new account/post/finding it lists, give me the handle/title and the
+   URL so I can click through. Note anything skipped because it's a stub
+   (fake_job detector, PagerDuty / email / webhook alerters).
 8. If any findings fired, walk me through the highest-severity one's metadata
    (signals breakdown for impersonation, top_authors + z-score for spikes) so
    I understand what triggered it.
+9. Ask if I want klaxon to run on a recurring schedule. If yes, ask for the
+   cadence (e.g. every 15 min, hourly, every 6 hours) and detect my OS:
+     - macOS → write a `~/Library/LaunchAgents/com.klaxon.scan.plist` that
+       runs `socmon scan` from this venv and config on the cadence; tell me
+       to `launchctl load` it.
+     - Linux → write a crontab line that does the same and tell me how to
+       install it.
+   The continuous `socmon run` mode is still on the roadmap, so cron/launchd
+   is the recommended way to schedule until that lands.
 
 Be concise. Don't paste full file contents back at me. Stop and wait for my
 input when you need brand-specific values.
@@ -106,6 +115,44 @@ Key knobs:
 - `spike_z_threshold` — z-score above which we call something a spike (default 3.0)
 - `spike_min_volume` — ignore "spikes" off near-zero baselines (default 5)
 - per-detector `options` block overrides the defaults
+
+### What klaxon remembers between runs
+
+State lives in the SQLite (or Postgres) DB at `storage.dsn`. Persisted across
+runs:
+
+- **observations** — every account/post we've ingested, keyed by stable
+  platform-id. Re-collecting is idempotent.
+- **findings** — every alert ever fired, keyed by a deterministic id
+  (detector + entity + bucket). The same finding cannot re-alert.
+- **watermarks** — per-collector "latest `created_at` we successfully
+  ingested," so the next run only fetches posts newer than that.
+- **kv_state** — generic detector state. Today, the impersonation detector
+  uses it to remember a hash of each account's (handle, display name, bio,
+  avatar pHash); unchanged accounts don't regenerate identical findings.
+
+Recomputed every run (no persistence needed):
+
+- Rolling baselines for the spike detectors — derived from raw observations.
+  This is what makes `socmon backtest` work: replaying detectors over the
+  same DB always produces the same findings.
+- Brand-logo pHashes — re-hashed from `brand.logo_paths` on startup.
+
+There is no automatic retention or GC yet. The DB grows. That's fine for v1
+on a single tenant; we'll add retention when it bites.
+
+### Scheduling
+
+`socmon run` (continuous mode with APScheduler) is on the roadmap. Until it
+lands, run `socmon scan` on a cadence via cron (Linux) or launchd (macOS):
+
+```bash
+# crontab -e — every 15 minutes
+*/15 * * * * cd /path/to/klaxon && /path/to/.venv/bin/socmon scan --window-hours 24 >> /tmp/klaxon.log 2>&1
+```
+
+The Claude Code Quick Start prompt above can write the launchd plist or
+crontab line for you on request.
 
 ### Tuning thresholds
 

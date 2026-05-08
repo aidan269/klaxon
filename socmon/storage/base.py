@@ -23,8 +23,11 @@ class Storage(ABC):
     # ----- Observations -----
 
     @abstractmethod
-    def upsert_observations(self, items: Iterable[Observation]) -> int:
-        """Idempotent. Returns count of NEW observations (not previously seen)."""
+    def upsert_observations(self, items: Iterable[Observation]) -> list[Observation]:
+        """Idempotent. Returns the NEW observations (those not previously seen in
+        storage). Existing rows are still updated in place; they're just absent
+        from the return value so callers can summarize "what's new this run."
+        """
         ...
 
     @abstractmethod

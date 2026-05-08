@@ -79,11 +79,11 @@ def build_detectors(cfg: SocmonConfig) -> list[Detector]:
 
 
 async def _collect_accounts(collectors: list[Collector], storage: Storage,
-                            cfg: SocmonConfig) -> int:
+                            cfg: SocmonConfig) -> list:
     """Drive `discover_accounts` on every collector, upsert to storage. Returns
-    count of new accounts seen this pass.
+    the AccountObservations that were new this pass (not already in storage).
     """
-    new_total = 0
+    new_items: list = []
     for c in collectors:
         log.info("collector %s: discovering accounts", c.name)
         try:
@@ -91,19 +91,19 @@ async def _collect_accounts(collectors: list[Collector], storage: Storage,
             async for acct in c.discover_accounts(cfg.brand, cfg.executives):
                 batch.append(acct)
                 if len(batch) >= 50:
-                    new_total += storage.upsert_observations(batch)
+                    new_items.extend(storage.upsert_observations(batch))
                     batch.clear()
             if batch:
-                new_total += storage.upsert_observations(batch)
+                new_items.extend(storage.upsert_observations(batch))
         except NotImplementedError:
             log.debug("collector %s does not implement discover_accounts; skipping", c.name)
         except Exception as e:  # don't let one platform sink the whole run
             log.exception("collector %s failed: %s", c.name, e)
-    return new_total
+    return new_items
 
 
 async def _collect_posts(collectors: list[Collector], storage: Storage,
-                         cfg: SocmonConfig, *, fallback_lookback_days: int = 1) -> int:
+                         cfg: SocmonConfig, *, fallback_lookback_days: int = 1) -> list:
     """Drive `collect()` on every collector with brand keywords + watermark.
 
     Watermark = max(observation.created_at) we've successfully ingested for that
@@ -111,7 +111,7 @@ async def _collect_posts(collectors: list[Collector], storage: Storage,
     so we don't accidentally pull years of history.
     """
     keywords = [cfg.brand.name, *cfg.brand.aliases]
-    new_total = 0
+    new_items: list = []
     for c in collectors:
         watermark = storage.watermark(c.name)
         since = watermark or (datetime.now(timezone.utc) - timedelta(days=fallback_lookback_days))
@@ -125,17 +125,17 @@ async def _collect_posts(collectors: list[Collector], storage: Storage,
                 if obs.created_at > max_seen:
                     max_seen = obs.created_at
                 if len(batch) >= 100:
-                    new_total += storage.upsert_observations(batch)
+                    new_items.extend(storage.upsert_observations(batch))
                     batch.clear()
             if batch:
-                new_total += storage.upsert_observations(batch)
+                new_items.extend(storage.upsert_observations(batch))
             if max_seen > since:
                 storage.set_watermark(c.name, max_seen)
         except NotImplementedError:
             log.debug("collector %s does not implement collect; skipping", c.name)
         except Exception as e:
             log.exception("collector %s failed: %s", c.name, e)
-    return new_total
+    return new_items
 
 
 # ---------------------------------------------------------------------------
@@ -181,9 +181,11 @@ def _dispatch(finding: Finding, routes: list[AlertRoute],
 
 def run_detectors(detectors: list[Detector], storage: Storage,
                   routes: list[AlertRoute], alerters: dict[str, Alerter],
-                  window: TimeWindow, dry_run: bool = False) -> int:
-    """Returns count of NEW findings (deduplicated)."""
-    new_count = 0
+                  window: TimeWindow, dry_run: bool = False) -> list[Finding]:
+    """Returns the NEW findings (post-dedup). Stubs and per-detector exceptions
+    are logged and skipped — they don't sink the whole run.
+    """
+    new_findings: list[Finding] = []
     for d in detectors:
         log.info("detector %s: running window=[%s..%s]", d.name, window.start, window.end)
         try:
@@ -199,12 +201,12 @@ def run_detectors(detectors: list[Detector], storage: Storage,
             if not is_new:
                 log.debug("dedup: skipping already-seen finding %s", finding.id)
                 continue
-            new_count += 1
+            new_findings.append(finding)
             sev = finding.severity.value
             log.info("FINDING [%s] %s (score %.1f)", sev.upper(), finding.title, finding.score)
             if not dry_run:
                 _dispatch(finding, routes, alerters)
-    return new_count
+    return new_findings
 
 
 # ---------------------------------------------------------------------------
@@ -212,14 +214,18 @@ def run_detectors(detectors: list[Detector], storage: Storage,
 # ---------------------------------------------------------------------------
 
 
-def scan(cfg: SocmonConfig, *, window_hours: int = 24) -> dict:
-    """One-shot: collect, detect, alert. Returns a small summary dict."""
+def scan(cfg: SocmonConfig, *, window_hours: int = 24, sample_size: int = 10) -> dict:
+    """One-shot: collect, detect, alert. Returns a structured summary that
+    pairs counts with sampled details (handles, titles, URLs) so callers —
+    including the CLI and Claude Code — can render something more useful than
+    bare counts.
+    """
     storage = build_storage(cfg)
     collectors = build_collectors(cfg)
     detectors = build_detectors(cfg)
     alerters = build_alerters(cfg)
 
-    async def _drive() -> tuple[int, int]:
+    async def _drive() -> tuple[list, list]:
         a = await _collect_accounts(collectors, storage, cfg)
         p = await _collect_posts(collectors, storage, cfg)
         return a, p
@@ -231,15 +237,16 @@ def scan(cfg: SocmonConfig, *, window_hours: int = 24) -> dict:
     new_findings = run_detectors(detectors, storage, cfg.routes, alerters, window)
 
     return {
-        "new_accounts": new_accounts,
-        "new_posts": new_posts,
-        "new_findings": new_findings,
         "window": [window.start.isoformat(), window.end.isoformat()],
+        "new_accounts": _summarize_accounts(new_accounts, sample_size),
+        "new_posts": _summarize_posts(new_posts, sample_size),
+        "new_findings": _summarize_findings(new_findings, sample_size),
     }
 
 
 def backtest(cfg: SocmonConfig, start: datetime, end: datetime,
-             detector_names: list[str] | None = None, dry_run: bool = True) -> dict:
+             detector_names: list[str] | None = None, dry_run: bool = True,
+             sample_size: int = 10) -> dict:
     """Replay detectors over already-collected observations. Skips collection."""
     storage = build_storage(cfg)
     detectors = [d for d in build_detectors(cfg)
@@ -248,7 +255,66 @@ def backtest(cfg: SocmonConfig, start: datetime, end: datetime,
     window = TimeWindow(start=start, end=end)
     new_findings = run_detectors(detectors, storage, cfg.routes, alerters, window,
                                  dry_run=dry_run)
-    return {"new_findings": new_findings, "dry_run": dry_run}
+    return {
+        "dry_run": dry_run,
+        "window": [start.isoformat(), end.isoformat()],
+        "new_findings": _summarize_findings(new_findings, sample_size),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Summarizers — small, dict-of-primitives so JSON-serializing is trivial.
+# ---------------------------------------------------------------------------
+
+
+def _summarize_accounts(items: list, sample: int) -> dict:
+    return {
+        "count": len(items),
+        "items": [
+            {
+                "platform": o.platform,
+                "handle": o.author_handle,
+                "url": str(o.url) if o.url else None,
+            }
+            for o in items[:sample]
+        ],
+        "truncated": len(items) > sample,
+    }
+
+
+def _summarize_posts(items: list, sample: int) -> dict:
+    out = []
+    for o in items[:sample]:
+        # First non-empty line of the post body, capped — usually the title.
+        title = next((ln for ln in (o.text or "").splitlines() if ln.strip()), "")
+        if len(title) > 100:
+            title = title[:97] + "..."
+        out.append({
+            "platform": o.platform,
+            "author": o.author_handle,
+            "title": title,
+            "url": str(o.url) if o.url else None,
+            "created_at": o.created_at.isoformat(),
+        })
+    return {"count": len(items), "items": out, "truncated": len(items) > sample}
+
+
+def _summarize_findings(items: list[Finding], sample: int) -> dict:
+    return {
+        "count": len(items),
+        "items": [
+            {
+                "id": f.id,
+                "kind": f.kind.value,
+                "severity": f.severity.value,
+                "score": f.score,
+                "title": f.title,
+                "url": (f.evidence[0].url if f.evidence and f.evidence[0].url else None),
+            }
+            for f in items[:sample]
+        ],
+        "truncated": len(items) > sample,
+    }
 
 
 def alerts_test(cfg: SocmonConfig, channels: list[str] | None = None) -> None:
