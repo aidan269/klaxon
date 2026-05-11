@@ -141,6 +141,37 @@ socmon demo --alerts          # asks before firing; ~7 real Slack messages
 socmon demo --alerts --yes    # no prompt — useful for recordings
 ```
 
+#### Showing continuous monitoring
+
+Two demo paths, depending on whether you want a real-API view or a guaranteed
+visual cadence.
+
+**Production-shaped — real polling against Reddit and RSS:**
+
+```bash
+socmon -v run --detector-interval-seconds 30
+```
+
+The scheduler boots, each enabled collector fires immediately, and detectors
+re-evaluate every 30s. Log lines show every collector tick, every detector
+pass, and any findings as they fire — concrete proof the system is running.
+Whether anything fires depends on what's actually happening upstream right
+now, so it's honest but not deterministic.
+
+**Drip-fed — guaranteed cadence of Slack alerts:**
+
+```bash
+socmon demo --watch --alerts --yes --interval-seconds 30
+```
+
+Performs the initial bulk seed (7 alerts to Slack at t=0), then every 30s
+adds a new impersonation candidate and fires its finding through to Slack.
+Manager sees a continuous trickle: t=0 → 7 messages; t=30 → 1 message;
+t=60 → 1 message; … until Ctrl-C. Style of impersonation rotates between
+typosquat / homoglyph / "_support" / "_team" / "_help" so the alerts feel
+varied. Use this when you want a live screen-share that's visually busy
+without depending on real upstream signal.
+
 ## Configuration
 
 See [`examples/socmon.yaml`](examples/socmon.yaml) for an annotated example.
@@ -263,5 +294,5 @@ the impersonation scoring (incl. confusables, exclusions, severity bands),
 end-to-end runs of both spike detectors over a real SQLite round-trip,
 the continuous-mode scheduler (job registration, per-tick failure isolation,
 graceful shutdown), and the `socmon demo` fixture pipeline (deterministic
-seeds → multi-detector findings). 105 cases total; the suite finishes in a
-couple of seconds with no network calls.
+seeds → multi-detector findings, plus drip-fed `--watch` mode). 109 cases
+total; the suite finishes in a couple of seconds with no network calls.

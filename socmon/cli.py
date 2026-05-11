@@ -187,9 +187,16 @@ def _format_finding_line(item: dict) -> str:
               help="Route demo findings through configured alerters. "
                    "Fires REAL Slack/email/PagerDuty messages — confirm before use.")
 @click.option("--yes", is_flag=True, help="Skip the --alerts confirmation prompt.")
+@click.option("--watch", is_flag=True,
+              help="Continuous-monitoring demo: initial seed + a new "
+                   "impersonation finding every --interval-seconds, "
+                   "until Ctrl-C. Pair with --alerts for live Slack drip.")
+@click.option("--interval-seconds", default=60, show_default=True, type=int,
+              help="Seconds between drips in --watch mode.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 @click.pass_context
-def demo(ctx: click.Context, alerts: bool, yes: bool, as_json: bool) -> None:
+def demo(ctx: click.Context, alerts: bool, yes: bool, watch: bool,
+         interval_seconds: int, as_json: bool) -> None:
     """Seed fixture data + run detectors → deterministic demo findings.
 
     Uses a separate SQLite file (socmon-demo.db in cwd) so your real DB is
@@ -197,20 +204,38 @@ def demo(ctx: click.Context, alerts: bool, yes: bool, as_json: bool) -> None:
     output is reproducible — good for screen-sharing and recordings.
 
     By default, alerters are NOT called (the demo is local-only). Pass
-    --alerts to fire the fixture findings through your configured Slack /
-    email / PagerDuty / webhook channels — useful for "this is what an
-    impersonation alert looks like" demos in a real Slack workspace.
+    --alerts to fire fixture findings through your configured Slack /
+    email / PagerDuty / webhook channels. Pair with --watch to drip a
+    fresh finding every --interval-seconds so a manager can see the
+    pipeline running continuously.
     """
     from socmon import demo as demo_mod
 
     if alerts and not yes:
-        click.confirm(
+        msg = (
+            f"--alerts --watch will keep sending real messages every "
+            f"{interval_seconds}s until Ctrl-C. Continue?"
+            if watch else
             "--alerts will send ~7 real messages to every alerter your routes "
-            "match (Slack/email/PagerDuty/etc). Continue?",
-            abort=True,
+            "match (Slack/email/PagerDuty/etc). Continue?"
         )
+        click.confirm(msg, abort=True)
 
     cfg = load_config(ctx.obj["config_path"])
+
+    if watch:
+        click.echo(
+            f"klaxon demo --watch · initial seed + drip every {interval_seconds}s"
+            f"{' · alerts → Slack' if alerts else ' · no network calls'}"
+            f" · Ctrl-C to stop"
+        )
+        demo_mod.run_demo_watch(
+            cfg,
+            route_alerts=alerts,
+            drip_interval_seconds=interval_seconds,
+        )
+        return
+
     summary = demo_mod.run_demo(cfg, route_alerts=alerts)
     if as_json:
         click.echo(json.dumps(summary, indent=2))

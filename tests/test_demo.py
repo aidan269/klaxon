@@ -189,3 +189,54 @@ def test_demo_with_alerts_dispatches_findings(cfg, monkeypatch) -> None:
     # And the routed findings cover all three implemented detector kinds.
     kinds = {f.kind.value for f in sent}
     assert kinds >= {"impersonation", "mention_spike", "keyword_spike"}
+
+
+# ---------------------------------------------------------------------------
+# --watch (continuous-monitoring demo)
+# ---------------------------------------------------------------------------
+
+
+def test_watch_drips_a_new_finding_each_iteration(cfg, monkeypatch) -> None:
+    """Initial seed dispatches the bulk findings; each subsequent drip should
+    dispatch at least one fresh impersonation finding (distinct entity →
+    distinct finding id → not blocked by dedup)."""
+    monkeypatch.setattr(demo_mod.time, "sleep", lambda _s: None)
+    _cfg_with_slack(cfg)
+    sent: list = []
+    from socmon.alerters.slack import SlackAlerter
+    monkeypatch.setattr(SlackAlerter, "send", lambda self, f: sent.append(f))
+
+    demo_mod.run_demo_watch(
+        cfg, drip_interval_seconds=0, route_alerts=True, max_iterations=3,
+    )
+
+    # Initial bulk seed + 3 drips. Bulk should produce >=3 findings; each drip
+    # adds an impersonation finding (sometimes more if multiple detectors pick
+    # the new account up). So total should comfortably exceed initial.
+    impersonation_findings = [f for f in sent if f.kind.value == "impersonation"]
+    # 3 initial impersonations (typosquat, homoglyph, exec) + ≥1 per drip.
+    assert len(impersonation_findings) >= 3 + 3, (
+        f"expected initial 3 + 3 drips of impersonation findings, got "
+        f"{len(impersonation_findings)} of {len(sent)} total"
+    )
+
+
+def test_watch_without_alerts_still_produces_findings(cfg, monkeypatch) -> None:
+    """Smoke test: watch loop runs without alerters configured/wired. Findings
+    accumulate in the demo DB; nothing should crash."""
+    monkeypatch.setattr(demo_mod.time, "sleep", lambda _s: None)
+    demo_mod.run_demo_watch(
+        cfg, drip_interval_seconds=0, route_alerts=False, max_iterations=2,
+    )
+
+    # Verify findings landed in storage.
+    from socmon.storage.sqlite import SqliteStorage
+    storage = SqliteStorage(demo_mod.DEMO_DSN)
+    findings = list(storage.query_findings())
+    # Initial: 3 impersonation + 1 mention + ≥1 keyword (test cfg has 1 keyword,
+    # demo injects one more, so ≥2 keyword findings). Plus 2 drips → +2 impersonation.
+    # Tight lower bound: 3 initial impersonation + 2 from drips = 5.
+    assert len(findings) >= 5
+    # And spike kinds should appear from the initial seed.
+    kinds = {f.kind.value for f in findings}
+    assert kinds >= {"impersonation", "mention_spike", "keyword_spike"}

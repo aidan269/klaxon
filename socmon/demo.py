@@ -27,6 +27,7 @@ output is repeatable.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -114,6 +115,122 @@ def run_demo(
         "demo": True,
         "db": DEMO_DB_FILE,
     }
+
+
+# ---------------------------------------------------------------------------
+# Continuous-mode demo: initial seed + periodic drips
+# ---------------------------------------------------------------------------
+
+
+def run_demo_watch(
+    cfg: SocmonConfig,
+    *,
+    drip_interval_seconds: int = 60,
+    route_alerts: bool = False,
+    max_iterations: int | None = None,
+) -> None:
+    """Continuous-monitoring demo. Performs the full initial seed (`run_demo`),
+    then every `drip_interval_seconds` adds a new impersonation candidate and
+    re-runs the detectors so a fresh finding lands in storage (and in Slack,
+    if `route_alerts=True`). Ctrl-C exits.
+
+    Designed for live "show me it running" demos: each drip produces ~1 new
+    finding so the manager sees a steady stream of alerts, not 7 at t=0 and
+    silence after.
+
+    `max_iterations` exists for tests; production callers leave it None and
+    rely on Ctrl-C.
+    """
+    initial = run_demo(cfg, route_alerts=route_alerts)
+    log.info(
+        "watch: initial seed produced %d finding(s); drip every %ds (Ctrl-C to stop)",
+        initial["new_findings"]["count"], drip_interval_seconds,
+    )
+
+    storage = SqliteStorage(DEMO_DSN)
+    iter_count = 0
+    try:
+        while max_iterations is None or iter_count < max_iterations:
+            time.sleep(drip_interval_seconds)
+            iter_count += 1
+            now = datetime.now(timezone.utc)
+
+            new_obs = _drip_round(cfg, storage, iter_count=iter_count, now=now)
+            log.info("watch: drip %d → seeded %d new candidate(s)", iter_count, len(new_obs))
+
+            new_findings = _run_detectors_for_drip(cfg, storage, now=now,
+                                                   route_alerts=route_alerts)
+            log.info("watch: drip %d → produced %d new finding(s)",
+                     iter_count, len(new_findings))
+    except KeyboardInterrupt:
+        log.info("watch: stopped after %d drip(s)", iter_count)
+
+
+def _drip_round(
+    cfg: SocmonConfig,
+    storage: Storage,
+    *,
+    iter_count: int,
+    now: datetime,
+) -> list[AccountObservation]:
+    """One new impersonation candidate, varied so each iteration produces a
+    genuinely fresh finding (not a dedup'd repeat).
+
+    Impersonations are easier to drip than spikes: each new account is a
+    distinct entity → distinct finding id. Spike findings are keyed on time
+    buckets, so two spikes in the same hour-bucket dedup to one finding
+    regardless of how many fixture posts we add.
+    """
+    brand = cfg.brand
+    platform = next(iter(brand.legit_handles), "reddit")
+    legit_list = brand.legit_handles.get(platform, [])
+    legit = legit_list[0] if legit_list else brand.name.lower().replace(" ", "")
+
+    # Rotate through impersonation styles so the demo doesn't feel repetitive.
+    style_idx = iter_count % 5
+    if style_idx == 0:
+        base = _typosquat_handle(legit)
+    elif style_idx == 1:
+        base = _homoglyph_handle(legit, brand.name)
+    elif style_idx == 2:
+        base = legit + "_support"
+    elif style_idx == 3:
+        base = legit + "_team"
+    else:
+        base = legit.replace("_", "") + "_help"
+
+    # Suffix the iteration so the entity is unique across drips.
+    handle = f"{base}_{iter_count}"
+    account = _make_account(
+        now, platform, handle,
+        display_name=f"{brand.name} Support",
+        bio=f"Official {brand.name} support — DMs open · drip #{iter_count}",
+        age_days=3,  # very young → impersonation detector's age signal fires
+    )
+    storage.upsert_observations([account])
+    return [account]
+
+
+def _run_detectors_for_drip(
+    cfg: SocmonConfig, storage: Storage, *,
+    now: datetime, route_alerts: bool,
+) -> list:
+    """Build detectors + alerters fresh each drip so any config-tweaks
+    between drips (rare, but supported) take effect."""
+    demo_cfg = cfg.model_copy(deep=True)
+    demo_cfg.keywords = list(demo_cfg.keywords) + [Keyword(
+        expr=f"{cfg.brand.name.lower()} AND breach",
+        severity=Severity.HIGH,
+        label="demo-breach-chatter",
+    )]
+    detectors = runner.build_detectors(demo_cfg)
+    if route_alerts:
+        alerters = runner.build_alerters(demo_cfg)
+        routes = demo_cfg.routes
+    else:
+        alerters, routes = {}, []
+    window = TimeWindow(start=now - timedelta(days=30), end=now)
+    return runner.run_detectors(detectors, storage, routes, alerters, window)
 
 
 # ---------------------------------------------------------------------------
