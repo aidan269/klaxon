@@ -154,6 +154,24 @@ lands, run `socmon scan` on a cadence via cron (Linux) or launchd (macOS):
 The Claude Code Quick Start prompt above can write the launchd plist or
 crontab line for you on request.
 
+**How frequent can I go?**
+
+| Cadence  | Status                   | Why                                                              |
+|----------|--------------------------|------------------------------------------------------------------|
+| ≥ 5 min  | Production sweet spot    | Well under Reddit's anonymous ~60 req/min limit                  |
+| 1–4 min  | Demo / incident-response | Reddit holds; some RSS feeds will start 429ing on tighter cycles |
+| < 1 min  | Only via launchd/systemd | cron's floor is 1 min; expect upstream rate-limit degradation    |
+
+The Reddit collector self-throttles to ~1.1s between requests and a typical
+scan costs ~5–15 seconds of upstream API time (depending on how many brand
+aliases + executives are configured). RSS feeds are source-dependent —
+BleepingComputer and Krebs tolerate tight polling, Google News doesn't.
+
+**Klaxon is dedup-safe at any cadence.** Watermarks per collector prevent
+re-ingesting observations we've already seen, and findings are keyed on a
+deterministic id (detector + entity + time-bucket), so an over-aggressive
+cron only burns upstream API quota — it does not produce duplicate alerts.
+
 ### Tuning thresholds
 
 Use `socmon backtest --start ... --end ... --dry-run` to replay detectors over
