@@ -22,6 +22,7 @@ env/
 *.sqlite
 *.sqlite3
 socmon.yaml
+socmon-demo.db
 !examples/socmon.yaml
 
 # Editor / OS

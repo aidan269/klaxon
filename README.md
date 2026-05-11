@@ -9,7 +9,7 @@ automated remediation.
 
 > **Status:** impersonation detector + mention/keyword spike detectors running
 > end-to-end. Reddit + RSS collectors and Slack alerter wired. Continuous mode
-> (`socmon run`) shipping with this commit. 98 tests passing.
+> (`socmon run`) and demo mode (`socmon demo`) both live. 105 tests passing.
 > Roadmap: `fake_job` detector, PagerDuty/email/webhook alerters, digest routing.
 
 ## What it does
@@ -101,9 +101,33 @@ socmon init                          # writes a starter socmon.yaml
 $EDITOR socmon.yaml                  # fill in brand, execs, keywords, alerters
 export SOCMON_SLACK_BRAND_WEBHOOK=https://hooks.slack.com/services/...
 socmon alerts test --channel slack-brand   # verify alerting wiring
+socmon demo                          # seed fixture data → see all detectors fire
 socmon scan --window-hours 168       # one-shot collect + detect + alert
 socmon run                           # continuous mode (Ctrl-C to stop)
 ```
+
+### Demoing
+
+`socmon demo` seeds a deterministic fixture dataset into a separate SQLite
+file (`socmon-demo.db`) and runs the detectors over it. Every invocation
+produces the same findings, so it's reproducible for screen-shares and
+recordings — and it never touches your real `storage.dsn`.
+
+What it seeds, all anchored to wall-clock `now` so timestamps look fresh:
+- **5 candidate accounts** for impersonation scoring: a typosquat
+  (`acme_officia1`), a Cyrillic homoglyph (`аcme_official`), an exec
+  impersonation (matches your first configured exec), the legitimate
+  handle as a control (should score 0), and a random unrelated user.
+- **A 7-day baseline + recent spike** for `mention_spike` (~2 mentions/hr
+  baseline → 30 in the current hour → critical, z>200).
+- **8 recent "breach" posts** for `keyword_spike` against a near-zero
+  baseline. Matches every configured keyword that contains your brand
+  name (including a `{brand} AND breach` expression the demo injects so
+  it works regardless of your real keyword list).
+
+Expected output: ~7 findings across `mention_spike`, `keyword_spike`, and
+`impersonation`, with severities ranging from HIGH to CRITICAL. The
+`fake_job` detector is skipped (still a stub).
 
 ## Configuration
 
@@ -224,7 +248,8 @@ pytest
 
 Tests under `tests/` cover the spike math, the keyword DSL parser/evaluator,
 the impersonation scoring (incl. confusables, exclusions, severity bands),
-end-to-end runs of both spike detectors over a real SQLite round-trip, and
+end-to-end runs of both spike detectors over a real SQLite round-trip,
 the continuous-mode scheduler (job registration, per-tick failure isolation,
-graceful shutdown). 98 cases total; the suite finishes in a couple of seconds
-with no network calls.
+graceful shutdown), and the `socmon demo` fixture pipeline (deterministic
+seeds → multi-detector findings). 105 cases total; the suite finishes in a
+couple of seconds with no network calls.

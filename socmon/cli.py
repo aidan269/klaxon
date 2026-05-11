@@ -2,9 +2,10 @@
 
 Subcommands:
   init           write a starter socmon.yaml
-  run            continuous mode — start scheduler, poll forever     (stub: scheduler slice)
+  run            continuous mode — start scheduler, poll forever
   scan           one-shot — collect once, run detectors, exit
   backtest       run detectors over historical observations only (no collection)
+  demo           seed fixture data + run detectors → deterministic demo output
   alerts test    fire a synthetic finding through every configured alerter
 """
 
@@ -179,6 +180,27 @@ def _format_finding_line(item: dict) -> str:
     score_str = f" (score {score:.1f})" if isinstance(score, (int, float)) else ""
     url = item.get("url") or ""
     return f"[{sev}] {item['title']}{score_str}" + (f"  {url}" if url else "")
+
+
+@main.command()
+@click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
+@click.pass_context
+def demo(ctx: click.Context, as_json: bool) -> None:
+    """Seed fixture data + run detectors → deterministic demo findings.
+
+    Uses a separate SQLite file (socmon-demo.db in cwd) so your real DB is
+    never touched. Each invocation wipes the demo DB and reseeds, so the
+    output is reproducible — good for screen-sharing and recordings.
+    """
+    from socmon import demo as demo_mod
+
+    cfg = load_config(ctx.obj["config_path"])
+    summary = demo_mod.run_demo(cfg)
+    if as_json:
+        click.echo(json.dumps(summary, indent=2))
+    else:
+        click.echo(f"klaxon demo — fixture data, no network calls. DB: {summary['db']}")
+        _render_scan_summary(summary)
 
 
 @main.group()
