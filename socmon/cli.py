@@ -183,23 +183,40 @@ def _format_finding_line(item: dict) -> str:
 
 
 @main.command()
+@click.option("--alerts", is_flag=True,
+              help="Route demo findings through configured alerters. "
+                   "Fires REAL Slack/email/PagerDuty messages — confirm before use.")
+@click.option("--yes", is_flag=True, help="Skip the --alerts confirmation prompt.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 @click.pass_context
-def demo(ctx: click.Context, as_json: bool) -> None:
+def demo(ctx: click.Context, alerts: bool, yes: bool, as_json: bool) -> None:
     """Seed fixture data + run detectors → deterministic demo findings.
 
     Uses a separate SQLite file (socmon-demo.db in cwd) so your real DB is
     never touched. Each invocation wipes the demo DB and reseeds, so the
     output is reproducible — good for screen-sharing and recordings.
+
+    By default, alerters are NOT called (the demo is local-only). Pass
+    --alerts to fire the fixture findings through your configured Slack /
+    email / PagerDuty / webhook channels — useful for "this is what an
+    impersonation alert looks like" demos in a real Slack workspace.
     """
     from socmon import demo as demo_mod
 
+    if alerts and not yes:
+        click.confirm(
+            "--alerts will send ~7 real messages to every alerter your routes "
+            "match (Slack/email/PagerDuty/etc). Continue?",
+            abort=True,
+        )
+
     cfg = load_config(ctx.obj["config_path"])
-    summary = demo_mod.run_demo(cfg)
+    summary = demo_mod.run_demo(cfg, route_alerts=alerts)
     if as_json:
         click.echo(json.dumps(summary, indent=2))
     else:
-        click.echo(f"klaxon demo — fixture data, no network calls. DB: {summary['db']}")
+        suffix = " · alerts dispatched" if alerts else " · no network calls"
+        click.echo(f"klaxon demo — fixture data, DB: {summary['db']}{suffix}")
         _render_scan_summary(summary)
 
 

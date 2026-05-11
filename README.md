@@ -129,6 +129,18 @@ Expected output: ~7 findings across `mention_spike`, `keyword_spike`, and
 `impersonation`, with severities ranging from HIGH to CRITICAL. The
 `fake_job` detector is skipped (still a stub).
 
+By default `socmon demo` does NOT call your alerters — the findings are
+returned and printed, not dispatched. Pass `--alerts` to route them through
+every configured Slack / email / PagerDuty / webhook channel as if they
+were real (CLI confirms before sending; `--yes` skips the prompt for
+scripted demos):
+
+```bash
+export SOCMON_SLACK_BRAND_WEBHOOK=https://hooks.slack.com/services/...
+socmon demo --alerts          # asks before firing; ~7 real Slack messages
+socmon demo --alerts --yes    # no prompt — useful for recordings
+```
+
 ## Configuration
 
 See [`examples/socmon.yaml`](examples/socmon.yaml) for an annotated example.

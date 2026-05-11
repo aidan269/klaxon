@@ -60,9 +60,21 @@ DEMO_DSN = f"sqlite:///{DEMO_DB_FILE}"
 # ---------------------------------------------------------------------------
 
 
-def run_demo(cfg: SocmonConfig, *, now: datetime | None = None) -> dict:
+def run_demo(
+    cfg: SocmonConfig,
+    *,
+    now: datetime | None = None,
+    route_alerts: bool = False,
+) -> dict:
     """Wipe demo DB → seed fixtures → run detectors → return a scan-shaped
-    summary dict the CLI can hand straight to `_render_scan_summary`."""
+    summary dict the CLI can hand straight to `_render_scan_summary`.
+
+    `route_alerts=False` (default) is the safe demo mode: findings are
+    produced and returned but never dispatched to Slack / PagerDuty / email
+    / webhook. `route_alerts=True` builds the configured alerters and routes
+    according to the user's routes table — useful for "show me what this
+    actually looks like in our Slack" demos, but fires real messages.
+    """
     now = now or datetime.now(timezone.utc)
 
     # Sqlite-specific wipe; portable enough for v1.
@@ -84,10 +96,15 @@ def run_demo(cfg: SocmonConfig, *, now: datetime | None = None) -> dict:
     ]
 
     detectors = runner.build_detectors(demo_cfg)
-    # No alerters in demo mode — we don't want to spam real Slack channels.
-    alerters: dict = {}
+    if route_alerts:
+        alerters = runner.build_alerters(demo_cfg)
+        routes = demo_cfg.routes
+    else:
+        # No alerters → run_detectors records findings but never dispatches.
+        alerters = {}
+        routes = []
     window = TimeWindow(start=now - timedelta(days=30), end=now)
-    new_findings = runner.run_detectors(detectors, storage, [], alerters, window)
+    new_findings = runner.run_detectors(detectors, storage, routes, alerters, window)
 
     return {
         "window": [window.start.isoformat(), window.end.isoformat()],

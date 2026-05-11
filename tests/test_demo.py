@@ -134,3 +134,58 @@ def test_homoglyph_helper_uses_cyrillic() -> None:
     assert "а" in out  # cyrillic а
     # Confirm it's actually a swap, not append — same length.
     assert len(out) == len("acme_official")
+
+
+# ---------------------------------------------------------------------------
+# --alerts routing
+# ---------------------------------------------------------------------------
+
+
+def _cfg_with_slack(cfg) -> object:
+    """Bolt a slack alerter + a catch-all route onto an existing demo config."""
+    from socmon.config import AlerterConfig, AlertRoute
+
+    cfg.alerters = [AlerterConfig(
+        name="s", type="slack",
+        # Direct webhook_url (not env) so tests don't need env setup; the alerter
+        # is monkeypatched anyway, so the URL is never dialed.
+        options={"webhook_url": "https://example.test/hook"},
+    )]
+    cfg.routes = [AlertRoute(
+        match_kind="*", severity_min=Severity.LOW, channels=["s"],
+    )]
+    return cfg
+
+
+def test_default_demo_does_not_dispatch_alerts_even_with_alerters_configured(
+    cfg, monkeypatch,
+) -> None:
+    """Safety check: route_alerts=False (CLI default) must NOT call any
+    alerter, even if the config has alerters + matching routes."""
+    _cfg_with_slack(cfg)
+    sent: list = []
+    from socmon.alerters.slack import SlackAlerter
+    monkeypatch.setattr(SlackAlerter, "send", lambda self, f: sent.append(f))
+
+    summary = demo_mod.run_demo(cfg, now=FIXED_NOW)  # route_alerts default False
+
+    assert summary["new_findings"]["count"] >= 3  # findings produced
+    assert sent == []                              # but nothing dispatched
+
+
+def test_demo_with_alerts_dispatches_findings(cfg, monkeypatch) -> None:
+    _cfg_with_slack(cfg)
+    sent: list = []
+    from socmon.alerters.slack import SlackAlerter
+    monkeypatch.setattr(SlackAlerter, "send", lambda self, f: sent.append(f))
+
+    summary = demo_mod.run_demo(cfg, now=FIXED_NOW, route_alerts=True)
+
+    n_findings = summary["new_findings"]["count"]
+    assert n_findings >= 3
+    # Every finding above the route's severity_min (LOW) should have been
+    # dispatched. With first-match-wins, our single catch-all route matches all.
+    assert len(sent) == n_findings
+    # And the routed findings cover all three implemented detector kinds.
+    kinds = {f.kind.value for f in sent}
+    assert kinds >= {"impersonation", "mention_spike", "keyword_spike"}
