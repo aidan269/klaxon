@@ -124,6 +124,13 @@ class SocmonConfig(BaseModel):
     spike_z_threshold: float = 3.0
     spike_min_volume: int = 5  # ignore "spikes" from a baseline of ~zero
 
+    # Continuous-mode cadence. `socmon run` ticks every enabled collector on its
+    # own `poll_interval_seconds` and ticks all detectors together on this
+    # interval. 5 minutes is the production sweet spot; tighter is fine for
+    # demos but Reddit's anonymous rate limit (~60 req/min) puts a real floor
+    # around ~1 min. See the Scheduling section of the README.
+    detector_interval_seconds: int = 300
+
     storage: StorageConfig = Field(default_factory=StorageConfig)
     collectors: list[CollectorConfig] = Field(default_factory=list)
     detectors: list[DetectorConfig] = Field(default_factory=list)

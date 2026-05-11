@@ -102,6 +102,20 @@ async def _collect_accounts(collectors: list[Collector], storage: Storage,
     return new_items
 
 
+async def collect_one(
+    collector: Collector, storage: Storage, cfg: SocmonConfig,
+) -> tuple[list, list]:
+    """One-collector wrapper around `_collect_accounts` + `_collect_posts`.
+
+    The continuous-mode scheduler calls this so each collector can tick on
+    its own cadence (set by `CollectorConfig.poll_interval_seconds`) without
+    waiting for slower collectors in the same pass.
+    """
+    accounts = await _collect_accounts([collector], storage, cfg)
+    posts = await _collect_posts([collector], storage, cfg)
+    return accounts, posts
+
+
 async def _collect_posts(collectors: list[Collector], storage: Storage,
                          cfg: SocmonConfig, *, fallback_lookback_days: int = 1) -> list:
     """Drive `collect()` on every collector with brand keywords + watermark.

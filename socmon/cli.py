@@ -56,13 +56,25 @@ def init(ctx: click.Context, force: bool) -> None:
 
 
 @main.command()
+@click.option("--detector-interval-seconds", type=int, default=None,
+              help="Override config's detector_interval_seconds for this run.")
 @click.pass_context
-def run(ctx: click.Context) -> None:
-    """Continuous mode (scheduler)."""
-    raise click.ClickException(
-        "`socmon run` is not implemented yet — the scheduler lands with the "
-        "spike-detector slice. Use `socmon scan` (one-shot) or schedule it via cron."
-    )
+def run(ctx: click.Context, detector_interval_seconds: int | None) -> None:
+    """Continuous mode: poll collectors and run detectors on a cadence.
+
+    Each enabled collector ticks on its own `poll_interval_seconds` from the
+    config. All detectors tick together on `detector_interval_seconds`
+    (default 300s). Ctrl-C / SIGTERM drains in-flight jobs and exits.
+    """
+    from socmon.scheduler import SocmonScheduler
+
+    cfg = load_config(ctx.obj["config_path"])
+    if detector_interval_seconds is not None:
+        cfg.detector_interval_seconds = detector_interval_seconds
+    sched = SocmonScheduler(cfg)
+    sched.setup()
+    click.echo("klaxon running. Ctrl-C to stop.")
+    sched.run()
 
 
 @main.command()

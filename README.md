@@ -8,9 +8,9 @@ automated remediation.
 > is `klaxon` — short, on-brand for an alerting tool.
 
 > **Status:** impersonation detector + mention/keyword spike detectors running
-> end-to-end. Reddit + RSS collectors and Slack alerter wired. 86 tests passing.
-> Roadmap: `fake_job` detector, PagerDuty/email/webhook alerters, continuous
-> scheduler (`socmon run`).
+> end-to-end. Reddit + RSS collectors and Slack alerter wired. Continuous mode
+> (`socmon run`) shipping with this commit. 98 tests passing.
+> Roadmap: `fake_job` detector, PagerDuty/email/webhook alerters, digest routing.
 
 ## What it does
 
@@ -102,7 +102,7 @@ $EDITOR socmon.yaml                  # fill in brand, execs, keywords, alerters
 export SOCMON_SLACK_BRAND_WEBHOOK=https://hooks.slack.com/services/...
 socmon alerts test --channel slack-brand   # verify alerting wiring
 socmon scan --window-hours 168       # one-shot collect + detect + alert
-# socmon run                         # continuous mode — on the roadmap
+socmon run                           # continuous mode (Ctrl-C to stop)
 ```
 
 ## Configuration
@@ -143,8 +143,25 @@ on a single tenant; we'll add retention when it bites.
 
 ### Scheduling
 
-`socmon run` (continuous mode with APScheduler) is on the roadmap. Until it
-lands, run `socmon scan` on a cadence via cron (Linux) or launchd (macOS):
+Two ways to keep klaxon ticking. Pick one — they're mutually exclusive.
+
+**`socmon run` — long-running process.** One Python process, APScheduler
+ticks each enabled collector on its `poll_interval_seconds` and ticks all
+detectors together on `detector_interval_seconds` (config-level, default
+300s). Storage / collectors / detectors / alerters are built once at startup
+and reused, so the steady-state per-tick cost is lower than cron's "boot a
+new Python every minute" model. Ctrl-C or SIGTERM drains in-flight jobs and
+exits. Pair with `systemd` (Linux) or `launchd` (macOS) for restart-on-crash
+supervision.
+
+```bash
+socmon run                                 # use config's detector_interval_seconds
+socmon run --detector-interval-seconds 60  # override for demo / incident mode
+```
+
+**`socmon scan` under cron — fire-and-exit.** Process boots, scans once,
+exits. More robust to memory leaks and crashes (each tick is a fresh
+process). Plays nicely with cron / GitHub Actions cron / k8s `CronJob`.
 
 ```bash
 # crontab -e — every 15 minutes
@@ -206,6 +223,8 @@ pytest
 ```
 
 Tests under `tests/` cover the spike math, the keyword DSL parser/evaluator,
-the impersonation scoring (incl. confusables, exclusions, severity bands), and
-end-to-end runs of both spike detectors over a real SQLite round-trip. 86 cases
-total; the suite finishes in a couple of seconds with no network calls.
+the impersonation scoring (incl. confusables, exclusions, severity bands),
+end-to-end runs of both spike detectors over a real SQLite round-trip, and
+the continuous-mode scheduler (job registration, per-tick failure isolation,
+graceful shutdown). 98 cases total; the suite finishes in a couple of seconds
+with no network calls.
