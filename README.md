@@ -8,12 +8,12 @@ automated remediation.
 > is `klaxon` — short, on-brand for an alerting tool.
 
 > **Status:** impersonation detector + mention/keyword spike detectors running
-> end-to-end. Reddit + RSS collectors and Slack alerter wired. Continuous mode
-> (`socmon run`) and demo mode (`socmon demo`) both live. systemd / launchd
-> deployment templates and external heartbeat (Healthchecks.io-compatible)
-> shipping with this commit. 113 tests passing.
-> Roadmap: `fake_job` detector, PagerDuty/email/webhook alerters, digest
-> routing, DB retention/prune.
+> end-to-end. Reddit + RSS collectors wired. Slack, **PagerDuty (Events API
+> v2), and generic webhook (HMAC-signed)** alerters all live. Continuous mode
+> (`socmon run`) and demo mode (`socmon demo`) both ship. systemd / launchd
+> deployment templates + external heartbeat (Healthchecks.io-compatible) +
+> retention via `socmon prune --older-than-days N`. 138 tests passing.
+> Roadmap: `fake_job` detector, email alerter, digest routing.
 
 ## What it does
 
