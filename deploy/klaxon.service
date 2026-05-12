@@ -1,0 +1,63 @@
+# systemd unit for klaxon — Linux production deployment.
+#
+# Install:
+#   sudo useradd --system --home /opt/klaxon --shell /usr/sbin/nologin klaxon
+#   sudo install -d -o klaxon -g klaxon /opt/klaxon /etc/klaxon /var/log/klaxon
+#   # ... clone repo + venv into /opt/klaxon ...
+#   # ... write your real config to /etc/klaxon/socmon.yaml ...
+#   # ... write secrets (webhook URLs, etc.) into /etc/klaxon/klaxon.env ...
+#   sudo cp deploy/klaxon.service /etc/systemd/system/klaxon.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now klaxon
+#
+# Inspect:
+#   systemctl status klaxon
+#   journalctl -u klaxon -f
+#
+# Restart-on-crash, log to journald, runs as an unprivileged system user.
+
+[Unit]
+Description=klaxon — self-hosted social media monitoring and brand protection
+Documentation=https://github.com/aidan269/klaxon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=klaxon
+Group=klaxon
+WorkingDirectory=/opt/klaxon
+
+# Secrets (webhook URLs, API tokens) live here, NOT in the YAML.
+# Example contents:
+#   SOCMON_SLACK_BRAND_WEBHOOK=https://hooks.slack.com/services/...
+# `EnvironmentFile=-` makes the file optional; drop the leading `-` if you'd
+# rather have klaxon refuse to start when secrets are missing.
+EnvironmentFile=-/etc/klaxon/klaxon.env
+
+ExecStart=/opt/klaxon/.venv/bin/socmon --config /etc/klaxon/socmon.yaml run
+
+# Restart policy: auto-recover from crashes but don't hot-loop forever.
+Restart=on-failure
+RestartSec=30
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# Logs go to journald → `journalctl -u klaxon` to follow.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=klaxon
+
+# Reasonable hardening for a network-facing process. Tighten further if you've
+# pinned the venv path and don't need /tmp scratch.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/log/klaxon /var/lib/klaxon
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

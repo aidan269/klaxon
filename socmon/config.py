@@ -131,6 +131,17 @@ class SocmonConfig(BaseModel):
     # around ~1 min. See the Scheduling section of the README.
     detector_interval_seconds: int = 300
 
+    # External heartbeat URL. After every SUCCESSFUL detector tick, the
+    # scheduler GETs this URL — designed for Healthchecks.io and friends, but
+    # any HTTP endpoint works. The URL is the canary; if your monitoring sees
+    # the heartbeat go silent for longer than expected, it pages you. Failures
+    # inside a detector tick deliberately skip the ping, so a silent klaxon
+    # process IS distinguishable from a healthy one that just isn't finding
+    # anything. Leave unset to disable. NEVER put a secret URL here directly —
+    # if it's sensitive, store it as an env var and inject it at startup.
+    heartbeat_url: str | None = None
+    heartbeat_timeout_seconds: float = 5.0
+
     storage: StorageConfig = Field(default_factory=StorageConfig)
     collectors: list[CollectorConfig] = Field(default_factory=list)
     detectors: list[DetectorConfig] = Field(default_factory=list)

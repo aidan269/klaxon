@@ -25,6 +25,7 @@ import logging
 import signal
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -178,3 +179,29 @@ class SocmonScheduler:
             log.info("detector tick complete: %d new finding(s)", len(new_findings))
         except Exception:
             log.exception("detector tick failed")
+            # Deliberately do NOT ping the heartbeat on failure — that's the
+            # whole point of having an external canary.
+            return
+
+        if self.cfg.heartbeat_url:
+            await self._ping_heartbeat(self.cfg.heartbeat_url)
+
+    async def _ping_heartbeat(self, url: str) -> None:
+        """Fire-and-(mostly-)forget GET to the configured heartbeat URL.
+
+        Compatible with Healthchecks.io's ping URLs (`https://hc-ping.com/…`)
+        and any other "GET = I'm alive" endpoint. Ping failures are logged
+        but never propagate — a transient network blip shouldn't make us
+        look like we died.
+        """
+        try:
+            async with httpx.AsyncClient(
+                timeout=self.cfg.heartbeat_timeout_seconds,
+            ) as client:
+                r = await client.get(url)
+                if r.status_code >= 400:
+                    log.warning("heartbeat ping → %d %s", r.status_code, url)
+                else:
+                    log.debug("heartbeat ping ok (%d)", r.status_code)
+        except Exception as e:
+            log.warning("heartbeat ping failed: %s", e)

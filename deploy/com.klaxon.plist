@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd agent template for klaxon — macOS production / always-on dev.
+
+  Setup:
+    1. Replace every $USER placeholder below with your actual macOS username.
+    2. Replace REDACTED_SLACK_WEBHOOK with your real webhook URL.
+    3. Drop this file into ~/Library/LaunchAgents/com.klaxon.plist
+    4. Load it:
+         launchctl load -w ~/Library/LaunchAgents/com.klaxon.plist
+       Confirm:
+         launchctl list | grep klaxon
+       Tail logs:
+         tail -F ~/klaxon/klaxon.log ~/klaxon/klaxon.err.log
+
+  Behavior:
+    - RunAtLoad=true → starts when the user logs in
+    - KeepAlive=true → auto-restarts if the process exits
+    - ThrottleInterval=30 → don't hot-loop crashes more than once per 30s
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.klaxon</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/$USER/klaxon/.venv/bin/socmon</string>
+    <string>--config</string>
+    <string>/Users/$USER/klaxon/socmon.yaml</string>
+    <string>run</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/$USER/klaxon</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/$USER/klaxon/klaxon.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/$USER/klaxon/klaxon.err.log</string>
+
+  <!--
+    Secrets only — webhook URLs, API tokens, etc. The YAML never holds
+    these directly; klaxon reads the env var name from `webhook_url_env`
+    in the alerter options and looks it up here.
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>SOCMON_SLACK_BRAND_WEBHOOK</key>
+    <string>REDACTED_SLACK_WEBHOOK</string>
+  </dict>
+</dict>
+</plist>

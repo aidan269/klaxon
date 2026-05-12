@@ -9,8 +9,11 @@ automated remediation.
 
 > **Status:** impersonation detector + mention/keyword spike detectors running
 > end-to-end. Reddit + RSS collectors and Slack alerter wired. Continuous mode
-> (`socmon run`) and demo mode (`socmon demo`) both live. 105 tests passing.
-> Roadmap: `fake_job` detector, PagerDuty/email/webhook alerters, digest routing.
+> (`socmon run`) and demo mode (`socmon demo`) both live. systemd / launchd
+> deployment templates and external heartbeat (Healthchecks.io-compatible)
+> shipping with this commit. 113 tests passing.
+> Roadmap: `fake_job` detector, PagerDuty/email/webhook alerters, digest
+> routing, DB retention/prune.
 
 ## What it does
 
@@ -238,6 +241,52 @@ process). Plays nicely with cron / GitHub Actions cron / k8s `CronJob`.
 The Claude Code Quick Start prompt above can write the launchd plist or
 crontab line for you on request.
 
+### Running klaxon in production
+
+For set-and-forget operation, wrap `socmon run` in a process supervisor
+(systemd / launchd / Docker) and add a heartbeat so you find out when
+*klaxon itself* dies, not when your Slack alerts mysteriously stop.
+
+**systemd (Linux):** [`deploy/klaxon.service`](deploy/klaxon.service) is a
+ready-to-go unit. Runs as an unprivileged `klaxon` user, restarts on
+failure with rate-limiting, logs to journald, hardened with the standard
+`ProtectSystem`/`PrivateTmp` flags. Secrets (webhook URLs, etc.) live in
+`/etc/klaxon/klaxon.env`, never in the YAML.
+
+```bash
+sudo cp deploy/klaxon.service /etc/systemd/system/klaxon.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now klaxon
+journalctl -u klaxon -f          # tail logs
+```
+
+**launchd (macOS):** [`deploy/com.klaxon.plist`](deploy/com.klaxon.plist)
+is the equivalent. Replace the `$USER` placeholders and webhook string,
+drop it into `~/Library/LaunchAgents/`, then:
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/com.klaxon.plist
+launchctl list | grep klaxon     # confirm it's running
+```
+
+**Heartbeat (works with both):** add a `heartbeat_url` to your config and
+klaxon will GET it after every successful detector tick. Designed for
+[Healthchecks.io](https://healthchecks.io) but works with anything that
+listens for a HEAD/GET as a "still alive" signal:
+
+```yaml
+# socmon.yaml
+heartbeat_url: https://hc-ping.com/<your-uuid>
+heartbeat_timeout_seconds: 5    # optional; defaults to 5s
+```
+
+Detector-tick failures deliberately skip the ping, so a silent klaxon is
+distinguishable from a healthy one that just hasn't found anything yet.
+Configure your Healthchecks.io check with a grace period a few minutes
+longer than `detector_interval_seconds` and you'll get paged the moment
+klaxon actually stops working — independent of whether Slack happens to
+have anything to say.
+
 **How frequent can I go?**
 
 | Cadence  | Status                   | Why                                                              |
@@ -293,6 +342,7 @@ Tests under `tests/` cover the spike math, the keyword DSL parser/evaluator,
 the impersonation scoring (incl. confusables, exclusions, severity bands),
 end-to-end runs of both spike detectors over a real SQLite round-trip,
 the continuous-mode scheduler (job registration, per-tick failure isolation,
-graceful shutdown), and the `socmon demo` fixture pipeline (deterministic
-seeds → multi-detector findings, plus drip-fed `--watch` mode). 109 cases
-total; the suite finishes in a couple of seconds with no network calls.
+graceful shutdown, heartbeat ping policy), and the `socmon demo` fixture
+pipeline (deterministic seeds → multi-detector findings, plus drip-fed
+`--watch` mode). 113 cases total; the suite finishes in a couple of seconds
+with no network calls.
