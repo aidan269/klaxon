@@ -23,6 +23,8 @@ from sqlalchemy import (
     Float,
     String,
     create_engine,
+    delete,
+    func,
     select,
 )
 from sqlalchemy.exc import IntegrityError
@@ -252,3 +254,28 @@ class SqliteStorage(Storage):
             else:
                 row.value = value
             s.commit()
+
+    # ----- Retention -----
+
+    def prune(self, before: datetime, *, dry_run: bool = False) -> tuple[int, int]:
+        before = _ensure_aware(before)
+        with Session(self.engine) as s:
+            obs_count = s.execute(
+                select(func.count()).select_from(_ObservationRow)
+                .where(_ObservationRow.created_at < before)
+            ).scalar_one()
+            findings_count = s.execute(
+                select(func.count()).select_from(_FindingRow)
+                .where(_FindingRow.detected_at < before)
+            ).scalar_one()
+            if not dry_run:
+                s.execute(
+                    delete(_ObservationRow)
+                    .where(_ObservationRow.created_at < before)
+                )
+                s.execute(
+                    delete(_FindingRow)
+                    .where(_FindingRow.detected_at < before)
+                )
+                s.commit()
+            return int(obs_count), int(findings_count)

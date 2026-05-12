@@ -73,3 +73,25 @@ class Storage(ABC):
 
     @abstractmethod
     def set_state(self, namespace: str, key: str, value: str) -> None: ...
+
+    # ----- Retention -----
+
+    @abstractmethod
+    def prune(
+        self,
+        before: datetime,
+        *,
+        dry_run: bool = False,
+    ) -> tuple[int, int]:
+        """Delete observations and findings older than `before`.
+
+        For observations the cutoff is `created_at` (the on-platform date —
+        the natural notion of "old data"). For findings it's `detected_at`.
+        Returns `(observations_affected, findings_affected)`. When `dry_run`
+        is True, no deletes happen but the counts are still computed.
+
+        Watermarks and kv_state are NOT pruned — they're small and the
+        detector's correctness depends on them (kv_state in particular
+        prevents re-emitting findings against already-scored accounts).
+        """
+        ...

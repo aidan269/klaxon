@@ -6,6 +6,7 @@ Subcommands:
   scan           one-shot — collect once, run detectors, exit
   backtest       run detectors over historical observations only (no collection)
   demo           seed fixture data + run detectors → deterministic demo output
+  prune          delete observations and findings older than N days
   alerts test    fire a synthetic finding through every configured alerter
 """
 
@@ -14,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import click
@@ -243,6 +244,50 @@ def demo(ctx: click.Context, alerts: bool, yes: bool, watch: bool,
         suffix = " · alerts dispatched" if alerts else " · no network calls"
         click.echo(f"klaxon demo — fixture data, DB: {summary['db']}{suffix}")
         _render_scan_summary(summary)
+
+
+@main.command()
+@click.option("--older-than-days", required=True, type=int,
+              help="Delete data with created_at / detected_at older than N days.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Show how much would be deleted without actually deleting.")
+@click.option("--yes", is_flag=True, help="Skip the confirmation prompt.")
+@click.pass_context
+def prune(ctx: click.Context, older_than_days: int, dry_run: bool, yes: bool) -> None:
+    """Delete old observations and findings from storage.
+
+    Watermarks and kv_state are deliberately preserved — they're tiny and the
+    detectors' correctness depends on them (kv_state in particular keeps the
+    impersonation detector from re-emitting findings against accounts it has
+    already scored).
+    """
+    if older_than_days < 1:
+        raise click.BadParameter("--older-than-days must be >= 1")
+
+    cfg = load_config(ctx.obj["config_path"])
+    storage = runner.build_storage(cfg)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+
+    n_obs, n_findings = storage.prune(before=cutoff, dry_run=True)
+
+    if n_obs == 0 and n_findings == 0:
+        click.echo(f"Nothing to prune (no rows older than {cutoff.isoformat()}).")
+        return
+
+    msg = (
+        f"{'DRY RUN: would delete' if dry_run else 'About to delete'} "
+        f"{n_obs} observation(s) + {n_findings} finding(s) older than "
+        f"{cutoff.isoformat()}."
+    )
+    click.echo(msg)
+
+    if dry_run:
+        return
+    if not yes:
+        click.confirm("Proceed? This is irreversible.", abort=True)
+
+    storage.prune(before=cutoff, dry_run=False)
+    click.echo(f"deleted {n_obs} observation(s) + {n_findings} finding(s).")
 
 
 @main.group()
