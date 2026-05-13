@@ -218,10 +218,16 @@ def _format_finding_line(item: dict) -> str:
 @click.option("--findings-only", is_flag=True,
               help="Show only the Findings block — skips Accounts and Posts. "
                    "Recommended for recordings and screen-shares.")
+@click.option("--catch", "catch_url", is_flag=False, flag_value="http://127.0.0.1:8765/",
+              default=None,
+              help="Route demo findings to a local webhook receiver (default URL: "
+                   "http://127.0.0.1:8765/). Pair with `python examples/catch.py` "
+                   "in another pane to show alerts firing without touching real Slack.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 @click.pass_context
 def demo(ctx: click.Context, alerts: bool, yes: bool, watch: bool,
-         interval_seconds: int, findings_only: bool, as_json: bool) -> None:
+         interval_seconds: int, findings_only: bool, catch_url: str | None,
+         as_json: bool) -> None:
     """Seed fixture data + run detectors → deterministic demo findings.
 
     Uses a separate SQLite file (socmon-demo.db in cwd) so your real DB is
@@ -249,23 +255,34 @@ def demo(ctx: click.Context, alerts: bool, yes: bool, watch: bool,
     cfg = load_config(ctx.obj["config_path"])
 
     if watch:
+        if catch_url:
+            suffix = f" · catch → {catch_url}"
+        elif alerts:
+            suffix = " · alerts → configured channels"
+        else:
+            suffix = " · no network calls"
         click.echo(
             f"klaxon demo --watch · initial seed + drip every {interval_seconds}s"
-            f"{' · alerts → Slack' if alerts else ' · no network calls'}"
-            f" · Ctrl-C to stop"
+            f"{suffix} · Ctrl-C to stop"
         )
         demo_mod.run_demo_watch(
             cfg,
             route_alerts=alerts,
             drip_interval_seconds=interval_seconds,
+            catch_url=catch_url,
         )
         return
 
-    summary = demo_mod.run_demo(cfg, route_alerts=alerts)
+    summary = demo_mod.run_demo(cfg, route_alerts=alerts, catch_url=catch_url)
     if as_json:
         click.echo(json.dumps(summary, indent=2))
     else:
-        suffix = " · alerts dispatched" if alerts else " · no network calls"
+        if catch_url:
+            suffix = f" · catch → {catch_url}"
+        elif alerts:
+            suffix = " · alerts dispatched"
+        else:
+            suffix = " · no network calls"
         click.echo(f"klaxon demo — fixture data, DB: {summary['db']}{suffix}")
         _render_scan_summary(summary, findings_only=findings_only)
 

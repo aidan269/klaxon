@@ -34,7 +34,7 @@ from pathlib import Path
 import click
 
 from socmon import runner
-from socmon.config import Keyword, SocmonConfig
+from socmon.config import AlerterConfig, AlertRoute, Keyword, SocmonConfig
 from socmon.detectors._spike_math import bucket_floor
 from socmon.models import (
     AccountObservation,
@@ -68,15 +68,18 @@ def run_demo(
     *,
     now: datetime | None = None,
     route_alerts: bool = False,
+    catch_url: str | None = None,
 ) -> dict:
     """Wipe demo DB → seed fixtures → run detectors → return a scan-shaped
     summary dict the CLI can hand straight to `_render_scan_summary`.
 
     `route_alerts=False` (default) is the safe demo mode: findings are
-    produced and returned but never dispatched to Slack / PagerDuty / email
-    / webhook. `route_alerts=True` builds the configured alerters and routes
-    according to the user's routes table — useful for "show me what this
-    actually looks like in our Slack" demos, but fires real messages.
+    produced and returned but never dispatched. `route_alerts=True` builds
+    the configured alerters and routes per the user's YAML — fires real
+    messages. `catch_url` is a third path: replace the configured alerters
+    with a single webhook pointing at the URL (e.g. the local catcher in
+    examples/catch.py), so the demo shows alerts firing without touching
+    a real Slack workspace.
     """
     now = now or datetime.now(timezone.utc)
 
@@ -87,19 +90,9 @@ def run_demo(
 
     seeded = seed_demo_data(storage, cfg, now=now)
 
-    # Inject a guaranteed-matching keyword so keyword_spike has something to fire on
-    # regardless of what the user's real config has.
-    demo_cfg = cfg.model_copy(deep=True)
-    demo_cfg.keywords = list(demo_cfg.keywords) + [
-        Keyword(
-            expr=f"{cfg.brand.name.lower()} AND breach",
-            severity=Severity.HIGH,
-            label="demo-breach-chatter",
-        )
-    ]
-
+    demo_cfg = _build_demo_cfg(cfg, catch_url=catch_url)
     detectors = runner.build_detectors(demo_cfg)
-    if route_alerts:
+    if route_alerts or catch_url:
         alerters = runner.build_alerters(demo_cfg)
         routes = demo_cfg.routes
     else:
@@ -124,12 +117,36 @@ def run_demo(
 # ---------------------------------------------------------------------------
 
 
+def _build_demo_cfg(cfg: SocmonConfig, *, catch_url: str | None = None) -> SocmonConfig:
+    """Augment the user's config with the demo-only keyword (so keyword_spike
+    fires) and optionally replace alerters/routes with a single webhook
+    pointing at `catch_url`."""
+    demo_cfg = cfg.model_copy(deep=True)
+    demo_cfg.keywords = list(demo_cfg.keywords) + [
+        Keyword(
+            expr=f"{cfg.brand.name.lower()} AND breach",
+            severity=Severity.HIGH,
+            label="demo-breach-chatter",
+        )
+    ]
+    if catch_url:
+        demo_cfg.alerters = [AlerterConfig(
+            name="catch", type="webhook",
+            options={"url": catch_url},
+        )]
+        demo_cfg.routes = [AlertRoute(
+            match_kind="*", severity_min=Severity.LOW, channels=["catch"],
+        )]
+    return demo_cfg
+
+
 def run_demo_watch(
     cfg: SocmonConfig,
     *,
     drip_interval_seconds: int = 60,
     route_alerts: bool = False,
     max_iterations: int | None = None,
+    catch_url: str | None = None,
 ) -> None:
     """Continuous-monitoring demo. Performs the full initial seed (`run_demo`),
     then every `drip_interval_seconds` adds a new impersonation candidate and
@@ -147,7 +164,7 @@ def run_demo_watch(
     `max_iterations` exists for tests; production callers leave it None and
     rely on Ctrl-C.
     """
-    run_demo(cfg, route_alerts=route_alerts)  # populate the demo DB
+    run_demo(cfg, route_alerts=route_alerts, catch_url=catch_url)  # populate the demo DB
 
     storage = SqliteStorage(DEMO_DSN)
     initial_findings = list(storage.query_findings())
@@ -171,7 +188,8 @@ def run_demo_watch(
             log.debug("watch: drip %d seeded %d new candidate(s)", iter_count, len(new_obs))
 
             new_findings = _run_detectors_for_drip(
-                cfg, storage, now=now, route_alerts=route_alerts,
+                cfg, storage, now=now,
+                route_alerts=route_alerts, catch_url=catch_url,
             )
             ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
             if new_findings:
@@ -241,18 +259,13 @@ def _drip_round(
 
 def _run_detectors_for_drip(
     cfg: SocmonConfig, storage: Storage, *,
-    now: datetime, route_alerts: bool,
+    now: datetime, route_alerts: bool, catch_url: str | None = None,
 ) -> list:
     """Build detectors + alerters fresh each drip so any config-tweaks
     between drips (rare, but supported) take effect."""
-    demo_cfg = cfg.model_copy(deep=True)
-    demo_cfg.keywords = list(demo_cfg.keywords) + [Keyword(
-        expr=f"{cfg.brand.name.lower()} AND breach",
-        severity=Severity.HIGH,
-        label="demo-breach-chatter",
-    )]
+    demo_cfg = _build_demo_cfg(cfg, catch_url=catch_url)
     detectors = runner.build_detectors(demo_cfg)
-    if route_alerts:
+    if route_alerts or catch_url:
         alerters = runner.build_alerters(demo_cfg)
         routes = demo_cfg.routes
     else:

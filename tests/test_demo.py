@@ -221,6 +221,35 @@ def test_watch_drips_a_new_finding_each_iteration(cfg, monkeypatch) -> None:
     )
 
 
+def test_catch_url_routes_findings_to_a_single_webhook(cfg, monkeypatch) -> None:
+    """`--catch URL` should bypass the configured alerters entirely and
+    POST every finding to the catch URL instead. The demo recipe relies on
+    this — content-team demos use the local catcher script, not real Slack."""
+    import httpx
+    import respx
+
+    # Pre-populate the config with a Slack alerter that should NOT be hit.
+    _cfg_with_slack(cfg)
+    posted: list = []
+    from socmon.alerters.slack import SlackAlerter
+    monkeypatch.setattr(SlackAlerter, "send", lambda self, f: posted.append(("slack", f)))
+
+    with respx.mock() as mock:
+        mock.post("http://127.0.0.1:8765/").mock(return_value=httpx.Response(200))
+        demo_mod.run_demo(cfg, now=FIXED_NOW, catch_url="http://127.0.0.1:8765/")
+
+        # All findings went to the catch URL; nothing went to Slack.
+        assert len(mock.calls) >= 3
+        assert posted == []
+
+        # Catch payloads are full Finding JSON.
+        import json as _json
+        body = _json.loads(mock.calls[0].request.read())
+        assert "severity" in body
+        assert "title" in body
+        assert body["kind"] in {"impersonation", "mention_spike", "keyword_spike"}
+
+
 def test_watch_without_alerts_still_produces_findings(cfg, monkeypatch) -> None:
     """Smoke test: watch loop runs without alerters configured/wired. Findings
     accumulate in the demo DB; nothing should crash."""
