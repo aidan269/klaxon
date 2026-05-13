@@ -31,6 +31,8 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import click
+
 from socmon import runner
 from socmon.config import Keyword, SocmonConfig
 from socmon.detectors._spike_math import bucket_floor
@@ -135,19 +137,29 @@ def run_demo_watch(
     if `route_alerts=True`). Ctrl-C exits.
 
     Designed for live "show me it running" demos: each drip produces ~1 new
-    finding so the manager sees a steady stream of alerts, not 7 at t=0 and
+    finding so the viewer sees a steady stream of alerts, not 7 at t=0 and
     silence after.
+
+    User-facing status (initial findings + per-drip lines) is written to
+    stdout via `click.echo` so the recording survives the common
+    `2>/dev/null` pattern that mutes the chatty INFO logs.
 
     `max_iterations` exists for tests; production callers leave it None and
     rely on Ctrl-C.
     """
-    initial = run_demo(cfg, route_alerts=route_alerts)
-    log.info(
-        "watch: initial seed produced %d finding(s); drip every %ds (Ctrl-C to stop)",
-        initial["new_findings"]["count"], drip_interval_seconds,
-    )
+    run_demo(cfg, route_alerts=route_alerts)  # populate the demo DB
 
     storage = SqliteStorage(DEMO_DSN)
+    initial_findings = list(storage.query_findings())
+
+    click.echo(f"\nInitial seed: {len(initial_findings)} finding(s).")
+    for f in initial_findings:
+        click.echo(f"    └ {_finding_line(f)}")
+    click.echo(
+        f"\nWatching for new findings every {drip_interval_seconds}s · "
+        f"Ctrl-C to stop\n"
+    )
+
     iter_count = 0
     try:
         while max_iterations is None or iter_count < max_iterations:
@@ -156,14 +168,30 @@ def run_demo_watch(
             now = datetime.now(timezone.utc)
 
             new_obs = _drip_round(cfg, storage, iter_count=iter_count, now=now)
-            log.info("watch: drip %d → seeded %d new candidate(s)", iter_count, len(new_obs))
+            log.debug("watch: drip %d seeded %d new candidate(s)", iter_count, len(new_obs))
 
-            new_findings = _run_detectors_for_drip(cfg, storage, now=now,
-                                                   route_alerts=route_alerts)
-            log.info("watch: drip %d → produced %d new finding(s)",
-                     iter_count, len(new_findings))
+            new_findings = _run_detectors_for_drip(
+                cfg, storage, now=now, route_alerts=route_alerts,
+            )
+            ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+            if new_findings:
+                for f in new_findings:
+                    click.echo(f"[{ts}] drip {iter_count} → {_finding_line(f)}")
+            else:
+                click.echo(f"[{ts}] drip {iter_count} → (no new findings)")
     except KeyboardInterrupt:
-        log.info("watch: stopped after %d drip(s)", iter_count)
+        click.echo(f"\nStopped after {iter_count} drip(s).")
+
+
+def _finding_line(f) -> str:
+    """One-line representation of a Finding for the watch stream. Mirrors
+    cli._format_finding_line so output looks identical to `socmon demo`."""
+    sev = f.severity.value.upper()
+    url = f.evidence[0].url if f.evidence and f.evidence[0].url else None
+    line = f"[{sev}] {f.title} (score {f.score:.1f})"
+    if url:
+        line += f"  {url}"
+    return line
 
 
 def _drip_round(
