@@ -82,17 +82,19 @@ def run(ctx: click.Context, detector_interval_seconds: int | None) -> None:
 @main.command()
 @click.option("--window-hours", default=24, show_default=True,
               help="Detection window size, in hours.")
+@click.option("--findings-only", is_flag=True,
+              help="Skip the Accounts and Posts sections; show findings only.")
 @click.option("--json", "as_json", is_flag=True,
               help="Emit JSON instead of the human-readable summary.")
 @click.pass_context
-def scan(ctx: click.Context, window_hours: int, as_json: bool) -> None:
+def scan(ctx: click.Context, window_hours: int, findings_only: bool, as_json: bool) -> None:
     """One-shot scan: collect, detect, alert."""
     cfg = load_config(ctx.obj["config_path"])
     summary = runner.scan(cfg, window_hours=window_hours)
     if as_json:
         click.echo(json.dumps(summary, indent=2))
     else:
-        _render_scan_summary(summary)
+        _render_scan_summary(summary, findings_only=findings_only)
 
 
 @main.command()
@@ -125,18 +127,23 @@ def backtest(ctx: click.Context, start: str, end: str, detector: tuple[str, ...]
 # ---------------------------------------------------------------------------
 
 
-def _render_scan_summary(summary: dict) -> None:
-    """Compact text layout. URLs are emitted bare so terminals make them clickable."""
+def _render_scan_summary(summary: dict, *, findings_only: bool = False) -> None:
+    """Compact text layout. URLs are emitted bare so terminals make them clickable.
+
+    When `findings_only` is True, the Accounts and Posts blocks are skipped —
+    for demos and incident-response views where only the alerts matter.
+    """
     win = summary.get("window") or ["?", "?"]
     click.echo("")
-    click.echo(f"Scan window: {win[0]} → {win[1]}")
+    click.echo(f"Scan window: {_fmt_ts(win[0])} → {_fmt_ts(win[1])}")
     click.echo("")
 
-    sections = [
-        ("Accounts", summary["new_accounts"], _format_account_line),
-        ("Posts", summary["new_posts"], _format_post_line),
-        ("Findings", summary["new_findings"], _format_finding_line),
-    ]
+    sections: list[tuple[str, dict, object]] = []
+    if not findings_only:
+        sections.append(("Accounts", summary["new_accounts"], _format_account_line))
+        sections.append(("Posts", summary["new_posts"], _format_post_line))
+    sections.append(("Findings", summary["new_findings"], _format_finding_line))
+
     for label, section, fmt in sections:
         count = section["count"]
         click.echo(f"  {label}: {count} new")
@@ -151,7 +158,10 @@ def _render_scan_summary(summary: dict) -> None:
 def _render_backtest_summary(summary: dict) -> None:
     win = summary.get("window") or ["?", "?"]
     click.echo("")
-    click.echo(f"Backtest window: {win[0]} → {win[1]}  (dry_run={summary['dry_run']})")
+    click.echo(
+        f"Backtest window: {_fmt_ts(win[0])} → {_fmt_ts(win[1])}  "
+        f"(dry_run={summary['dry_run']})"
+    )
     click.echo("")
     f = summary["new_findings"]
     click.echo(f"  Findings: {f['count']} new")
@@ -160,6 +170,17 @@ def _render_backtest_summary(summary: dict) -> None:
     if f["truncated"]:
         click.echo(f"    └ … ({f['count'] - len(f['items'])} more not shown)")
     click.echo("")
+
+
+def _fmt_ts(iso: str) -> str:
+    """Drop microseconds + trailing tz suffix for readable display."""
+    if not iso or iso == "?":
+        return iso or "?"
+    try:
+        dt = datetime.fromisoformat(iso)
+        return dt.strftime("%Y-%m-%d %H:%M UTC")
+    except (ValueError, TypeError):
+        return iso
 
 
 def _format_account_line(item: dict) -> str:
@@ -194,10 +215,13 @@ def _format_finding_line(item: dict) -> str:
                    "until Ctrl-C. Pair with --alerts for live Slack drip.")
 @click.option("--interval-seconds", default=60, show_default=True, type=int,
               help="Seconds between drips in --watch mode.")
+@click.option("--findings-only", is_flag=True,
+              help="Show only the Findings block — skips Accounts and Posts. "
+                   "Recommended for recordings and screen-shares.")
 @click.option("--json", "as_json", is_flag=True, help="Emit JSON.")
 @click.pass_context
 def demo(ctx: click.Context, alerts: bool, yes: bool, watch: bool,
-         interval_seconds: int, as_json: bool) -> None:
+         interval_seconds: int, findings_only: bool, as_json: bool) -> None:
     """Seed fixture data + run detectors → deterministic demo findings.
 
     Uses a separate SQLite file (socmon-demo.db in cwd) so your real DB is
@@ -243,7 +267,7 @@ def demo(ctx: click.Context, alerts: bool, yes: bool, watch: bool,
     else:
         suffix = " · alerts dispatched" if alerts else " · no network calls"
         click.echo(f"klaxon demo — fixture data, DB: {summary['db']}{suffix}")
-        _render_scan_summary(summary)
+        _render_scan_summary(summary, findings_only=findings_only)
 
 
 @main.command()

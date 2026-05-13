@@ -371,12 +371,15 @@ class ImpersonationDetector(Detector):
             bucket_start=now.replace(hour=0, minute=0, second=0, microsecond=0),
             bucket_seconds=86400,
         )
-        title = (
-            f"Possible impersonation: {account.platform}/{account.author_handle}"
-            f" ({sev.value}, score {score})"
-        )
+        # Severity and score are rendered by the CLI / alerter formatters; the
+        # title carries the *what* and *who*, not the *how bad*.
         if breakdown.get("matched_exec"):
-            title = f"Possible exec impersonation of {breakdown['matched_exec']} — " + title
+            title = (
+                f"Exec impersonation of {breakdown['matched_exec']}: "
+                f"{account.platform}/{account.author_handle}"
+            )
+        else:
+            title = f"Possible impersonation: {account.platform}/{account.author_handle}"
         summary = (
             f"Account {account.author_handle!r} on {account.platform} resembles "
             f"{breakdown.get('matched_legit') or self.brand.name!r}. "

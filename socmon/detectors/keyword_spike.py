@@ -198,7 +198,7 @@ class KeywordSpikeDetector(Detector):
             severity=sev,
             score=round(score, 2),
             title=(
-                f"Keyword spike: {label}: {current} matches in last "
+                f"Keyword spike {label!r}: {current} in last "
                 f"{_bucket_label(self.bucket_seconds)} (z={z_display})"
             ),
             summary=(

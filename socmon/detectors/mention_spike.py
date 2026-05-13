@@ -122,9 +122,11 @@ class MentionSpikeDetector(Detector):
             detector=self.name,
             severity=sev,
             score=round(score, 2),
+            # Baseline mean is in metadata for anyone who wants it; the title
+            # stays terse so it fits a Slack header and a CLI line.
             title=(
-                f"Mention spike on {platform_label}: "
-                f"{current} in last {bucket_label} (z={z_display}, baseline mean={mean:.1f})"
+                f"Mention spike: {current} in last {bucket_label} (z={z_display})"
+                + (f" on {self.platform}" if self.platform else "")
             ),
             summary=(
                 f"Recent bucket [{last_bucket.isoformat()}] saw {current} mentions "
